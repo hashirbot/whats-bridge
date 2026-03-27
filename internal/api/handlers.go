@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"net/http"
 	"os"
 	"whatsbridge/internal/bot"
@@ -85,6 +86,8 @@ func SendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[SendHandler] to=%q message=%q file=%q", to, message, fileName)
+
 	var sendErr error
 	if len(fileBytes) > 0 {
 		tmpFile := fmt.Sprintf("temp_%s", fileName)
@@ -106,6 +109,7 @@ func SendHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if sendErr != nil {
+		log.Printf("[SendHandler] FAILED to=%q err=%v", to, sendErr)
 		w.WriteHeader(http.StatusInternalServerError)
 		json.NewEncoder(w).Encode(map[string]interface{}{
 			"success": false,
@@ -114,6 +118,7 @@ func SendHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	log.Printf("[SendHandler] SUCCESS to=%q", to)
 	json.NewEncoder(w).Encode(map[string]interface{}{
 		"success": true,
 	})
