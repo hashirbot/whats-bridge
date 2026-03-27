@@ -1,0 +1,17 @@
+*.exe
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.crt
+*.key
+setup.iss
+build.ps1
+revolt-connect-installer.exe
+.git
+.gitignore
+.dockerignore
+README.md
+service.log
+temp_*
+.DS_Store
