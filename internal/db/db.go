@@ -15,15 +15,42 @@ func InitDB(dsn string) {
 	var err error
 	LocalDB, err = sql.Open("mysql", dsn)
 	if err != nil {
-		log.Fatalf("Failed to open MySQL: %v", err)
+		log.Printf("Failed to open MySQL: %v — will retry", err)
+		go retryDB(dsn)
+		return
 	}
 
-	// Test connection
+	// Test connection with retry
 	if err = LocalDB.Ping(); err != nil {
-		log.Fatalf("Failed to connect to MySQL: %v", err)
+		log.Printf("Failed to connect to MySQL: %v — will retry in background", err)
+		go retryDB(dsn)
+		return
 	}
 
-	// Create tables
+	createTables()
+	log.Println("MySQL database initialized successfully.")
+}
+
+func retryDB(dsn string) {
+	for {
+		time.Sleep(5 * time.Second)
+		var err error
+		LocalDB, err = sql.Open("mysql", dsn)
+		if err != nil {
+			log.Printf("MySQL retry: open failed: %v", err)
+			continue
+		}
+		if err = LocalDB.Ping(); err != nil {
+			log.Printf("MySQL retry: ping failed: %v", err)
+			continue
+		}
+		createTables()
+		log.Println("MySQL database initialized successfully (on retry).")
+		return
+	}
+}
+
+func createTables() {
 	queries := []string{
 		`CREATE TABLE IF NOT EXISTS usage_logs (
 			id INT AUTO_INCREMENT PRIMARY KEY,
@@ -46,8 +73,6 @@ func InitDB(dsn string) {
 			fmt.Printf("Error creating table: %v\n", err)
 		}
 	}
-
-	log.Println("MySQL database initialized successfully.")
 }
 
 func LogMessageUsage(success bool) {
