@@ -7,6 +7,7 @@ import (
 	"os"
 
 	"whatsbridge/internal/api"
+	"whatsbridge/internal/auth"
 	"whatsbridge/internal/bot"
 	"whatsbridge/internal/db"
 )
@@ -21,6 +22,9 @@ func main() {
 	}
 	db.InitDB(mysqlDSN)
 
+	// ---- Seed default admin user ----
+	auth.InitUsers()
+
 	// ---- WhatsApp Bot (uses PostgreSQL for session store) ----
 	go bot.InitWhatsApp()
 
@@ -31,7 +35,12 @@ func main() {
 	// ---- HTTP Server ----
 	mux := http.NewServeMux()
 
-	// API endpoints
+	// Auth API (no protection needed)
+	mux.HandleFunc("/api/auth/login", auth.LoginHandler)
+	mux.HandleFunc("/api/auth/logout", auth.AuthLogoutHandler)
+	mux.HandleFunc("/api/auth/check", auth.CheckAuthHandler)
+
+	// External API endpoints — NO auth (Laravel connects directly)
 	mux.HandleFunc("/api/status", api.StatusHandler)
 	mux.HandleFunc("/api/send", api.SendHandler)
 	mux.HandleFunc("/api/metrics", api.MetricsHandler)
@@ -42,27 +51,37 @@ func main() {
 	mux.HandleFunc("/api/connect", api.ConnectHandler)
 	mux.HandleFunc("/api/disconnect", api.DisconnectHandler)
 
-	// WebSocket bridge
+	// WebSocket bridge — NO auth (Laravel WSS)
 	mux.HandleFunc("/ws/bridge", bot.HandleBridgeWebSocket)
 
-	// Static pages
-	mux.HandleFunc("/connect", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "public/connect.html")
-	})
-	mux.HandleFunc("/messages", func(w http.ResponseWriter, r *http.Request) {
-		http.ServeFile(w, r, "public/messages.html")
+	// Login page (no auth)
+	mux.HandleFunc("/login", func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "public/login.html")
 	})
 
-	// Static assets & fallback to dashboard
+	// Protected pages
+	mux.HandleFunc("/connect", auth.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "public/connect.html")
+	}))
+	mux.HandleFunc("/messages", auth.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "public/messages.html")
+	}))
+	mux.HandleFunc("/chat", auth.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "public/chat.html")
+	}))
+
+	// Static assets (no auth for JS/CSS)
 	fs := http.FileServer(http.Dir("public"))
 	mux.Handle("/js/", fs)
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+
+	// Dashboard (protected) + fallback
+	mux.HandleFunc("/", auth.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" || r.URL.Path == "/index.html" {
 			http.ServeFile(w, r, "public/index.html")
 			return
 		}
 		fs.ServeHTTP(w, r)
-	})
+	}))
 
 	// Koyeb injects PORT; WEB_PORT is a manual override
 	port := os.Getenv("PORT")
