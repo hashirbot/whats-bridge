@@ -15,3 +15,13 @@ README.md
 service.log
 temp_*
 .DS_Store
+
+# UI templates (not needed in production)
+ui/
+
+# Reference app
+the app which uses current setup to sent the messages/
+
+# Build artifacts
+whatsbridge
+whatsbridge.exe
