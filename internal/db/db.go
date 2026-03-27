@@ -1,7 +1,10 @@
 package db
 
 import (
+	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"time"
@@ -64,6 +67,15 @@ func createTables() {
 			message TEXT NOT NULL,
 			scheduled_for DATETIME NOT NULL,
 			status VARCHAR(20) DEFAULT 'pending'
+		);`,
+		`CREATE TABLE IF NOT EXISTS api_keys (
+			id INT AUTO_INCREMENT PRIMARY KEY,
+			name VARCHAR(100) NOT NULL,
+			key_hash VARCHAR(64) NOT NULL UNIQUE,
+			key_prefix VARCHAR(8) NOT NULL,
+			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+			last_used_at DATETIME NULL,
+			is_active TINYINT(1) DEFAULT 1
 		);`,
 	}
 
@@ -142,4 +154,118 @@ func GetPendingMessages(now string) ([]ScheduledMessage, error) {
 func UpdateScheduledMessageStatus(id int, status string) error {
 	_, err := LocalDB.Exec(`UPDATE scheduled_messages SET status = ? WHERE id = ?`, status, id)
 	return err
+}
+
+// ─── API Key Management ─────────────────────────────────────
+
+type APIKey struct {
+	ID        int       `json:"id"`
+	Name      string    `json:"name"`
+	KeyPrefix string    `json:"key_prefix"`
+	CreatedAt time.Time `json:"created_at"`
+	LastUsed  *string   `json:"last_used_at"`
+	IsActive  bool      `json:"is_active"`
+}
+
+func hashKey(key string) string {
+	h := sha256.Sum256([]byte(key))
+	return hex.EncodeToString(h[:])
+}
+
+// CreateAPIKey generates a new API key, stores its hash, and returns the raw key.
+func CreateAPIKey(name string) (string, error) {
+	// Generate 32-byte random key
+	b := make([]byte, 32)
+	if _, err := rand.Read(b); err != nil {
+		return "", fmt.Errorf("failed to generate random key: %w", err)
+	}
+	rawKey := "wb_" + hex.EncodeToString(b) // wb_ prefix for easy identification
+	keyHash := hashKey(rawKey)
+	keyPrefix := rawKey[:11] // "wb_" + first 8 hex chars
+
+	_, err := LocalDB.Exec(
+		`INSERT INTO api_keys (name, key_hash, key_prefix) VALUES (?, ?, ?)`,
+		name, keyHash, keyPrefix,
+	)
+	if err != nil {
+		return "", err
+	}
+
+	log.Printf("API key '%s' created (prefix: %s...)", name, keyPrefix)
+	return rawKey, nil
+}
+
+// ListAPIKeys returns all API keys (without the actual key, just metadata).
+func ListAPIKeys() ([]APIKey, error) {
+	rows, err := LocalDB.Query(`SELECT id, name, key_prefix, created_at, last_used_at, is_active FROM api_keys ORDER BY created_at DESC`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var keys []APIKey
+	for rows.Next() {
+		var k APIKey
+		var createdStr string
+		var lastUsedStr sql.NullString
+		if err := rows.Scan(&k.ID, &k.Name, &k.KeyPrefix, &createdStr, &lastUsedStr, &k.IsActive); err != nil {
+			continue
+		}
+		k.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdStr)
+		if lastUsedStr.Valid {
+			k.LastUsed = &lastUsedStr.String
+		}
+		keys = append(keys, k)
+	}
+	return keys, nil
+}
+
+// DeleteAPIKey removes an API key by ID.
+func DeleteAPIKey(id int) error {
+	result, err := LocalDB.Exec(`DELETE FROM api_keys WHERE id = ?`, id)
+	if err != nil {
+		return err
+	}
+	rows, _ := result.RowsAffected()
+	if rows == 0 {
+		return fmt.Errorf("API key not found")
+	}
+	log.Printf("API key #%d deleted", id)
+	return nil
+}
+
+// ValidateAPIKey checks if a raw API key is valid and active.
+func ValidateAPIKey(rawKey string) bool {
+	if LocalDB == nil || rawKey == "" {
+		return false
+	}
+
+	keyHash := hashKey(rawKey)
+	var isActive bool
+	err := LocalDB.QueryRow(`SELECT is_active FROM api_keys WHERE key_hash = ?`, keyHash).Scan(&isActive)
+	if err != nil {
+		return false
+	}
+
+	if isActive {
+		// Update last_used_at
+		go func() {
+			LocalDB.Exec(`UPDATE api_keys SET last_used_at = NOW() WHERE key_hash = ?`, keyHash)
+		}()
+	}
+
+	return isActive
+}
+
+// HasAnyAPIKeys checks if there are any API keys configured.
+func HasAnyAPIKeys() bool {
+	if LocalDB == nil {
+		return false
+	}
+	var count int
+	err := LocalDB.QueryRow(`SELECT COUNT(*) FROM api_keys WHERE is_active = 1`).Scan(&count)
+	if err != nil {
+		return false
+	}
+	return count > 0
 }

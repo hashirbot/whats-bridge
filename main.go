@@ -40,16 +40,21 @@ func main() {
 	mux.HandleFunc("/api/auth/logout", auth.AuthLogoutHandler)
 	mux.HandleFunc("/api/auth/check", auth.CheckAuthHandler)
 
-	// External API endpoints — NO auth (Laravel connects directly)
-	mux.HandleFunc("/api/status", api.StatusHandler)
-	mux.HandleFunc("/api/send", api.SendHandler)
-	mux.HandleFunc("/api/metrics", api.MetricsHandler)
-	mux.HandleFunc("/api/schedule", api.ScheduleHandler)
-	mux.HandleFunc("/api/bulk-send", api.BulkSendHandler)
-	mux.HandleFunc("/api/qr", api.QRHandler)
-	mux.HandleFunc("/api/logout", api.LogoutHandler)
-	mux.HandleFunc("/api/connect", api.ConnectHandler)
-	mux.HandleFunc("/api/disconnect", api.DisconnectHandler)
+	// External API endpoints — Protected by API Key (Bearer token)
+	mux.HandleFunc("/api/status", api.RequireAPIKey(api.StatusHandler))
+	mux.HandleFunc("/api/send", api.RequireAPIKey(api.SendHandler))
+	mux.HandleFunc("/api/metrics", api.RequireAPIKey(api.MetricsHandler))
+	mux.HandleFunc("/api/schedule", api.RequireAPIKey(api.ScheduleHandler))
+	mux.HandleFunc("/api/bulk-send", api.RequireAPIKey(api.BulkSendHandler))
+	mux.HandleFunc("/api/qr", api.RequireAPIKey(api.QRHandler))
+	mux.HandleFunc("/api/logout", api.RequireAPIKey(api.LogoutHandler))
+	mux.HandleFunc("/api/connect", api.RequireAPIKey(api.ConnectHandler))
+	mux.HandleFunc("/api/disconnect", api.RequireAPIKey(api.DisconnectHandler))
+
+	// API Key management endpoints — Protected by session auth (dashboard user)
+	mux.HandleFunc("/api/keys", auth.RequireAuthAPI(api.APIKeysListHandler))
+	mux.HandleFunc("/api/keys/create", auth.RequireAuthAPI(api.APIKeysCreateHandler))
+	mux.HandleFunc("/api/keys/delete", auth.RequireAuthAPI(api.APIKeysDeleteHandler))
 
 	// WebSocket bridge — NO auth (Laravel WSS)
 	mux.HandleFunc("/ws/bridge", bot.HandleBridgeWebSocket)
@@ -68,6 +73,9 @@ func main() {
 	}))
 	mux.HandleFunc("/chat", auth.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
 		http.ServeFile(w, r, "public/chat.html")
+	}))
+	mux.HandleFunc("/api-keys", auth.RequireAuth(func(w http.ResponseWriter, r *http.Request) {
+		http.ServeFile(w, r, "public/api-keys.html")
 	}))
 
 	// Static assets (no auth for JS/CSS)

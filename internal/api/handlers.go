@@ -7,6 +7,8 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strconv"
+	"strings"
 	"whatsbridge/internal/bot"
 	"whatsbridge/internal/db"
 	"time"
@@ -275,6 +277,133 @@ func DisconnectHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	bot.GlobalClient.Disconnect()
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
+}
+
+// ─── API Key Middleware ──────────────────────────────────────
+
+// RequireAPIKey middleware checks for a valid Bearer token.
+// If no API keys are configured, all requests pass through (open mode).
+func RequireAPIKey(next http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		// If no API keys exist, allow all (backward compatible open mode)
+		if !db.HasAnyAPIKeys() {
+			next(w, r)
+			return
+		}
+
+		// Check Authorization header
+		authHeader := r.Header.Get("Authorization")
+		if authHeader == "" {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "API key required. Set Authorization: Bearer <your-api-key>",
+			})
+			return
+		}
+
+		// Extract Bearer token
+		parts := strings.SplitN(authHeader, " ", 2)
+		if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusUnauthorized)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Invalid authorization format. Use: Bearer <your-api-key>",
+			})
+			return
+		}
+
+		token := parts[1]
+		if !db.ValidateAPIKey(token) {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusForbidden)
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"success": false,
+				"error":   "Invalid or inactive API key",
+			})
+			return
+		}
+
+		next(w, r)
+	}
+}
+
+// ─── API Key Management Handlers ─────────────────────────────
+
+func APIKeysListHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	keys, err := db.ListAPIKeys()
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+	if keys == nil {
+		keys = []db.APIKey{}
+	}
+	json.NewEncoder(w).Encode(map[string]interface{}{"success": true, "keys": keys})
+}
+
+func APIKeysCreateHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	var req struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.Name == "" {
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "Name is required"})
+		return
+	}
+
+	rawKey, err := db.CreateAPIKey(req.Name)
+	if err != nil {
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"success": true,
+		"key":     rawKey,
+		"message": "Save this key — it won't be shown again!",
+	})
+}
+
+func APIKeysDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodDelete && r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+
+	var req struct {
+		ID int `json:"id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		// Try query param
+		idStr := r.URL.Query().Get("id")
+		if idStr == "" {
+			w.WriteHeader(http.StatusBadRequest)
+			json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": "ID is required"})
+			return
+		}
+		req.ID, _ = strconv.Atoi(idStr)
+	}
+
+	if err := db.DeleteAPIKey(req.ID); err != nil {
+		w.WriteHeader(http.StatusNotFound)
+		json.NewEncoder(w).Encode(map[string]interface{}{"success": false, "error": err.Error()})
+		return
+	}
+
 	json.NewEncoder(w).Encode(map[string]interface{}{"success": true})
 }
 
